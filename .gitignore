@@ -1,0 +1,5 @@
+*.img
+*.tar.gz
+boot/
+root/
+boot_copy/

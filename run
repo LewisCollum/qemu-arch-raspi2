@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+
+# https://qemu.weilnetz.de/doc/qemu-doc.html#Standard-options
+
+# https://archlinuxarm.org/platforms/armv6/raspberry-pi
+# https://adayinthelifeof.nl/2011/10/11/creating-partitioned-virtual-disk-images/
+
+# https://www.reddit.com/r/linuxquestions/comments/8kecbh/qemu_raspberry_pi_2_troubles/
+# older https://azeria-labs.com/emulate-raspberry-pi-with-qemu/
+
+bootLoopSource="p1"
+bootTarget=./boot
+bootCopy=./boot_copy
+rootLoopSource="p2"
+rootTarget=./root
+deviceFile=.device
+
+main() {
+	ensureCommandsExist
+	parseParameters $@
+	
+	if [[ $state == "mount" ]]; then
+		ensureFileExists
+
+        device=`sudo losetup -f -P $file --show`
+        echo $device > $deviceFile
+
+        [ ! -d $bootTarget ] && mkdir $bootTarget
+        sudo mount $device$bootLoopSource $bootTarget
+
+        [ ! -d $rootTarget ] && mkdir $rootTarget
+        sudo mount $device$rootLoopSource $rootTarget
+        
+	elif [[ $state == "copy" ]]; then
+        [ ! -d $bootCopy ] && mkdir $bootCopy
+        if [ ! -f $deviceFile ]; then
+            echo "Mount before copying."; exit 1
+        fi
+        cp -rf $bootTarget/* $bootCopy
+        
+	elif [[ $state == "umount" ]]; then
+        if [ ! -f $deviceFile ]; then
+            echo "Mount before unmounting."; exit 1
+        fi
+        sudo umount $bootTarget $rootTarget
+        sudo losetup -d `cat .device`
+        rm .device
+        
+        
+    elif [[ $state == "image" ]]; then
+		ensureFileExists
+        if [ -f $deviceFile ]; then
+            echo "Unmount before running."; exit 1
+        fi
+        qemu-system-arm \
+            -nographic \
+            -sd $file \
+            -machine raspi2 \
+            -kernel ./kernel7.img \
+            -initrd ./initramfs-linux.img \
+            -dtb ./bcm2836-rpi-2-b.dtb
+        # -drive file=$image,cache=writeback,format=raw
+        # -append "root=$device$rootLoopSource rootfstype=ext4" \
+            # -m 1G \
+            # -smp 4 \
+            # -cpu arm1176 \
+            # -no-reboot \
+
+    elif [[ $state == "setup" ]]; then
+        qemu-img create -f raw $file 8G
+        echo "P1: W95 FAT32 (LBA) +100M (last sector) \nP2: default"
+        sudo fdisk $file
+        
+    fi
+}
+
+ensureCommandsExist() {
+	command -v qemu-system-arm > /dev/null 2>&1 || {
+		>&2 echo "Install \"qemu-system-arm\". pacman -S qemu-arch-extra for Arch Linux."
+		exit 1
+	}
+}
+
+parseParameters() {
+	local options=`getopt --quiet -options edh --long encrypt,decrypt,help -- "$@"`
+	
+	while true ; do
+		case "$1" in
+			-m|--mount) state="mount"; file="$2"; shift 2; break;;
+			-u|--umount) state="umount"; shift 1; break;;
+            -c|--copy) state="copy"; shift 1; break;;
+            -i|--image) state="image"; file="$2"; shift 2; break;;
+            -s|--setup) state="setup"; file="$2"; shift 2; break;;
+			-*) >&2 echo "Not a valid option \"$1\". Use `basename "$0"` --help"; exit 1;;
+			*) >&2 echo "Must start with an option. Use `basename "$0"` --help"; exit 1;;
+		esac
+	done
+	ensureNoUnhandledParameters $#
+}
+
+ensureNoUnhandledParameters() {
+	if [[ $1 -ne "0" ]]; then
+		>&2 echo "Too many parameters. Use \"ewp [-e|-d] <file>\"."
+		exit 1
+	fi
+}
+
+
+ensureFileExists() {
+	if [ ! -f $file ]; then
+		>&2 echo "File \"$file\" does not exist."
+		exit 1
+	fi
+}
+
+main "$@"
